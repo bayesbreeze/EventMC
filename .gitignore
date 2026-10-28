@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.npy
+*.npz
+*.pt
+*.h5
+*.mat
+*.nii
+*.nii.gz
+.ipynb_checkpoints/
+.DS_Store
