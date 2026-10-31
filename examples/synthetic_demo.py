@@ -1,63 +1,95 @@
-"""Synthetic end-to-end example: a small ellipsoid phantom, 4 coils, 13 interleaved segments and two abrupt head movements.
+"""Installation check: run the full EventMC pipeline on a small synthetic phantom (12 coils, 13 interleaved segments,
+two abrupt movements) and print the pipeline log, the selected candidate and the output shapes.
 
-Run:  python examples/synthetic_demo.py            (GPU if available, otherwise CPU; a few minutes on CPU)
-      python examples/synthetic_demo.py --device cpu --single     (EventMC-S only, faster)
+The phantom is far smaller and simpler than a brain (64 x 104 x 64 voxels), so the estimated motion here is NOT
+representative of accuracy on real data; see the paper for the evaluation on CC359 and PMoC3D.
+
+Run:  python examples/synthetic_demo.py              (about 3 min on a GPU, longer on CPU)
+      python examples/synthetic_demo.py --single     (EventMC-S only, faster)
 """
-import argparse, sys, time
+import argparse
+import sys
+import time
 from pathlib import Path
+
 import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from eventmc import Core, run_eventmc
+from eventmc import EncodingModel, run_eventmc
 
-D, H, W, C, NS = 48, 78, 48, 4, 13          # kz, ky, kx, coils, segments (6 ky lines each)
-VOX = 3.0                                     # mm; a 144 x 234 x 144 mm field of view
+D, H, W = 64, 104, 64       # kz, ky, kx
+N_COILS = 12
+N_SEGMENTS = 13             # 8 ky lines each
+VOXEL_MM = 1.0
+
+
+def ellipsoid(z, y, x, centre, radii):
+    r2 = ((z - centre[0]) / radii[0]) ** 2 + ((y - centre[1]) / radii[1]) ** 2 + ((x - centre[2]) / radii[2]) ** 2
+    return r2 <= 1
 
 
 def phantom():
+    """A head-like phantom: nested ellipsoids, small structures and a smooth texture."""
     z, y, x = np.meshgrid(*[np.linspace(-1, 1, n) for n in (D, H, W)], indexing='ij')
     img = np.zeros((D, H, W))
-    for (cz, cy, cx, az, ay, ax, v) in [(0, 0, 0, .8, .85, .75, 1.), (0, 0, 0, .7, .75, .65, -.6), (.15, .25, .1, .2, .25, .2, .5),
-                                         (-.2, -.2, -.1, .25, .18, .22, .35), (0, -.45, .2, .12, .12, .15, .6)]:
-        img += v * (((z - cz) / az) ** 2 + ((y - cy) / ay) ** 2 + ((x - cx) / ax) ** 2 <= 1)
+    for centre, radii, value in [((0, 0, 0), (.8, .85, .75), 1.), ((0, 0, 0), (.7, .75, .65), -.6),
+                                 ((.15, .25, .1), (.2, .25, .2), .5), ((-.2, -.2, -.1), (.25, .18, .22), .35),
+                                 ((0, -.45, .2), (.12, .12, .15), .6)]:
+        img += value * ellipsoid(z, y, x, centre, radii)
+    rng = np.random.default_rng(1)
+    for _ in range(150):                                   # small structures, like fine detail in a brain
+        centre, radii = rng.uniform(-.6, .6, 3), rng.uniform(.04, .12, 3)
+        img += rng.uniform(-.4, .4) * ellipsoid(z, y, x, centre, radii)
+    f2 = np.add.outer(np.add.outer(np.fft.fftfreq(D) ** 2, np.fft.fftfreq(H) ** 2), np.fft.fftfreq(W) ** 2)
+    texture = np.real(np.fft.ifftn(np.fft.fftn(rng.standard_normal((D, H, W))) * np.exp(-f2 / .03)))
+    img = np.clip(img, 0, None) * (1 + .3 * texture / texture.std()) * (img > 0)
     return torch.tensor(img, dtype=torch.complex64)
 
 
 def coil_maps():
-    z, y, x = np.meshgrid(*[np.linspace(-1, 1, n) for n in (D, H, W)], indexing='ij'); maps = []
-    for (cz, cy, cx) in [(1.2, 0, 0), (-1.2, 0, 0), (0, 1.3, 0), (0, -1.3, 0)]:
-        maps.append(np.exp(-((z - cz) ** 2 + (y - cy) ** 2 + (x - cx) ** 2) / 1.5) * np.exp(1j * (cz * x + cy * z)))
-    maps = np.array(maps); maps /= np.sqrt((np.abs(maps) ** 2).sum(0, keepdims=True))
+    """Smooth sensitivities of coils on a ring around the head, normalised to unit root-sum-of-squares."""
+    z, y, x = np.meshgrid(*[np.linspace(-1, 1, n) for n in (D, H, W)], indexing='ij')
+    maps = []
+    for k in range(N_COILS):
+        angle = 2 * np.pi * k / N_COILS
+        cz, cy, cx = 1.3 * np.cos(angle), 1.3 * np.sin(angle), .5 * (-1) ** k
+        maps.append(np.exp(-((z - cz) ** 2 + (y - cy) ** 2 + (x - cx) ** 2) / 1.2) * np.exp(1j * (cz * x + cy * z)))
+    maps = np.array(maps)
+    maps /= np.sqrt((np.abs(maps) ** 2).sum(0, keepdims=True))
     return torch.tensor(maps, dtype=torch.complex64)
 
 
-def main():
-    ap = argparse.ArgumentParser(); ap.add_argument('--device', default=None); ap.add_argument('--single', action='store_true'); a = ap.parse_args()
-    dev = a.device or ('cuda' if torch.cuda.is_available() else 'cpu')
-    segments = [np.arange((5 * s) % NS, H, NS) for s in range(NS)]      # interleaved: every segment spans all of ky
-    # true poses (rotation vector in degrees, translation in mm): a nod before segment 4 and a shift after segment 9
-    truth = np.zeros((NS, 6)); truth[:4] = [4., 0, 0, 0, 3., 0]; truth[10:] = [0, 3., 0, 0, 0, -4.]
-    x_true = phantom().to(dev); maps = coil_maps().to(dev)
-    sim = Core((C, D, H, W), maps, segments, np.ones((D, H), bool), voxel_mm=VOX, device=dev)
-    y = torch.zeros((C, D, H, W), dtype=torch.complex64, device=dev)
+def simulate(device):
+    """k-space of the phantom with one pose per segment: a nod before segment 4 and a shift after segment 9."""
+    segments = [np.arange((5 * s) % N_SEGMENTS, H, N_SEGMENTS) for s in range(N_SEGMENTS)]   # interleaved
+    truth = np.zeros((N_SEGMENTS, 6))                      # rotation vector (deg), translation (mm)
+    truth[:4] = [4., 0, 0, 0, 3., 0]
+    truth[10:] = [0, 3., 0, 0, 0, -4.]
+    x_true, maps = phantom().to(device), coil_maps().to(device)
+    sim = EncodingModel((N_COILS, D, H, W), maps, segments, np.ones((D, H), bool), voxel_mm=VOXEL_MM, device=device)
+    y = torch.zeros((N_COILS, D, H, W), dtype=torch.complex64, device=device)
     with torch.no_grad():
         for s, rows in enumerate(segments):
-            y[:, :, rows, :] = sim.rows_k(sim.warp(x_true, sim.tt(truth[s, :3]), sim.tt(truth[s, 3:])), sim.E(rows))
+            pose = torch.tensor(truth[s], dtype=torch.float32, device=device)
+            y[:, :, rows, :] = sim.encode(sim.move(x_true, pose[:3], pose[3:]), sim.ky_operator(rows))
     g = torch.Generator(device='cpu').manual_seed(0)
-    y += (1e-3 * torch.complex(torch.randn(y.shape, generator=g), torch.randn(y.shape, generator=g))).to(dev)
+    y += (1e-3 * torch.complex(torch.randn(y.shape, generator=g), torch.randn(y.shape, generator=g))).to(device)
+    return y, segments, maps
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--device', default=None)
+    parser.add_argument('--single', action='store_true', help='run EventMC-S only')
+    args = parser.parse_args()
+    device = args.device or ('cuda' if torch.cuda.is_available() else 'cpu')
+
+    y, segments, maps = simulate(device)
     t0 = time.monotonic()
-    out = run_eventmc(y, segments, maps=maps, voxel_mm=VOX, multi_anchor=not a.single, device=dev)
-    X = out['poses']; a_ = out['anchor']
-    rel = truth - truth[a_]                     # the anchor is in the motion-free interval, so this is the true relative pose
-    print(f'\nanchor {a_}, selected {out["selected"]}, {time.monotonic() - t0:.0f} s')
-    print('segment | true (rx, ry, ty, tz)      | estimated')
-    for s in range(NS):
-        print(f'{s:7d} | {rel[s, 0]:5.2f} {rel[s, 1]:5.2f} {rel[s, 4]:5.2f} {rel[s, 5]:5.2f} | {X[s, 0]:5.2f} {X[s, 1]:5.2f} {X[s, 4]:5.2f} {X[s, 5]:5.2f}')
-    err = np.abs(X - rel); print(f'max pose error: {err[:, :3].max():.2f} deg, {err[:, 3:].max():.2f} mm')
-    xu = sim.comb(y).abs().cpu(); xe = out['image'].abs(); xt = x_true.abs().cpu()
-    nrmse = lambda u: float((u - xt).norm() / xt.norm())
-    print(f'NRMSE: uncorrected {nrmse(xu):.3f}, EventMC {nrmse(xe):.3f}')
+    out = run_eventmc(y, segments, maps=maps, voxel_mm=VOXEL_MM, multi_anchor=not args.single, device=device)
+    print(f'\nanchor {out["anchor"]}, selected {out["selected"]}, residuals {out["residuals"]}')
+    print(f'image {tuple(out["image"].shape)}, poses {out["poses"].shape}, {time.monotonic() - t0:.0f} s')
 
 
 if __name__ == '__main__':

@@ -1,5 +1,7 @@
-"""Centred FFTs and the smoothed isotropic total variation used by all TV reconstructions."""
+"""Centred FFTs and the smoothed isotropic total variation used by all image updates."""
 import torch
+
+from .params import TV_EPS
 
 
 def fftc(x, dims=(-3, -2, -1)):
@@ -13,6 +15,9 @@ def ifftc(x, dims=(-3, -2, -1)):
 
 
 def tv3(u):
-    """Smoothed isotropic 3D total variation, sum over voxels of sqrt(|grad u|^2 + 1e-6)."""
-    d = [u[1:, :-1, :-1] - u[:-1, :-1, :-1], u[:-1, 1:, :-1] - u[:-1, :-1, :-1], u[:-1, :-1, 1:] - u[:-1, :-1, :-1]]
-    return torch.sqrt(sum(x.abs().square() for x in d) + 1e-6).sum()
+    """Smoothed isotropic 3D total variation, sum over voxels of sqrt(|grad u|^2 + eps) with forward differences
+    (Eq. (A.2))."""
+    grads = [u[1:, :-1, :-1] - u[:-1, :-1, :-1],
+             u[:-1, 1:, :-1] - u[:-1, :-1, :-1],
+             u[:-1, :-1, 1:] - u[:-1, :-1, :-1]]
+    return torch.sqrt(sum(g.abs().square() for g in grads) + TV_EPS).sum()
