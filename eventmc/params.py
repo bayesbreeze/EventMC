@@ -9,7 +9,7 @@ TV_EPS = 1e-6               # smoothing constant inside the TV square root
 # L-BFGS budgets
 IMAGE_ITERS = 15            # ImgEst in Stages A and B
 POSE_ITERS = 30             # MotEst, per segment and starting pose
-FINAL_ITERS = 30            # final reconstruction (Algorithm 1, line 14)
+FINAL_ITERS = 30            # final reconstruction (Algorithm 1, line 13)
 
 # Stage A (Section 3.1)
 STAGE_A_ROUNDS = 5

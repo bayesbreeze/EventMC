@@ -1,5 +1,5 @@
 """Stage A (fitting to event-guided references), Stage B (coarse-to-fine refinement) and the final reconstruction,
-Algorithm 1, lines 3-14."""
+Algorithm 1, lines 3-13."""
 import numpy as np
 import torch
 
@@ -85,6 +85,6 @@ def stage_b(model, y, poses, schedule=STAGE_B_SCHEDULE):
 
 
 def final_reconstruction(model, y, poses, iters=FINAL_ITERS):
-    """Algorithm 1, line 14: TV reconstruction from all samples with the poses fixed, starting from the uncorrected
+    """Algorithm 1, line 13: TV reconstruction from all samples with the poses fixed, starting from the uncorrected
     image."""
     return model.reconstruct(model.coil_combine(y), poses, y, list(range(model.n_segments)), iters)

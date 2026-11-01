@@ -140,8 +140,8 @@ The phantom is much smaller and simpler than a brain, so its estimated motion do
 | Pre-run and anchor selection (Sec. 3.1, line 2) | `anchor.prerun`, `anchor.guard` |
 | Reference segments, Eq. (3) | `stages.stable_interval`, `stages.stage_a` |
 | Pose fitting and events | `model.EncodingModel.fit_poses_outward`, `events.detect_events`, `events.smooth_poses` |
-| Stage B (Sec. 3.2, lines 9–13) | `stages.stage_b`, `stages.central_band` |
-| Final reconstruction (line 14) | `stages.final_reconstruction` |
+| Stage B (Sec. 3.2, lines 9–12) | `stages.stage_b`, `stages.central_band` |
+| Final reconstruction (line 13) | `stages.final_reconstruction` |
 | Multi-anchor extension (Sec. 3.3) | `pipeline.half_resolution`, `pipeline.eventmc_half`, `pipeline.run_eventmc` |
 
 </details>
